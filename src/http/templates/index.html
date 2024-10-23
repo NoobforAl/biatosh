@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>User Radar</title>
+        <style>
+            body {
+                display: grid;
+                place-items: center;
+                height: 100vh;
+                background-color: #f4f4f4;
+            }
+
+            .outer-circle {
+                width: 240px;
+                height: 240px;
+                border-radius: 50%;
+                box-shadow: 0 0 8px 0 #aaa;
+                position: relative;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+            }
+
+            .green-scanner {
+                width: 200px;
+                height: 200px;
+                border-radius: 50%;
+                position: absolute;
+                top: 20px;
+                left: 20px;
+                background: conic-gradient(#00ff0055, #00ff00);
+                animation: scan 4s infinite linear;
+            }
+
+            .outer-circle:before,
+            .outer-circle:after {
+                content: "";
+                width: 240px;
+                height: 240px;
+                border-radius: 50%;
+                position: absolute;
+                border: 1px solid #eee;
+                animation: ripple 2s infinite linear;
+            }
+
+            .outer-circle:after {
+                animation-delay: 1s;
+            }
+
+            @keyframes scan {
+                to {
+                    transform: rotate(1turn);
+                }
+            }
+
+            @keyframes ripple {
+                to {
+                    transform: scale(2.5);
+                }
+            }
+
+            .user-button {
+                position: absolute;
+                width: 65px;
+                height: 65px;
+                border-radius: 50%;
+                color: white;
+                border: none;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                cursor: pointer;
+                font-size: 14px;
+                transition: background-color 0.3s, transform 0.3s;
+                box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
+                z-index: 10;
+            }
+
+            .user-button:hover {
+                filter: brightness(1.1);
+                transform: scale(1.1);
+            }
+        </style>
+    </head>
+    <body>
+        <div class="outer-circle">
+            <div class="green-scanner"></div>
+            <div id="user-element"></div>
+        </div>
+
+        <script>
+            const outerCircle = document.getElementById("user-element");
+            let ws;
+            let reconnectInterval = 1000;
+            const userId = "{{ .UserId }}";
+            const users = {};
+
+            function connectWebSocket() {
+                ws = new WebSocket("/ws");
+
+                ws.onopen = () => {
+                    console.log("Connected to the WebSocket server");
+                    reconnectInterval = 1000; // Reset on successful connection
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    console.log("data", data);
+                    if (data.message == undefined) {
+                        updateUserButtons(data);
+                    } else {
+                        showNotification(data.message);
+                    }
+                };
+
+                ws.onclose = () => {
+                    console.log(
+                        `Disconnected from WebSocket, reconnecting in ${reconnectInterval} ms`
+                    );
+                    setTimeout(connectWebSocket, reconnectInterval);
+                    reconnectInterval = Math.min(reconnectInterval * 2, 30000); // Exponential backoff
+                };
+
+                ws.onerror = (error) => {
+                    console.error("WebSocket error:", error);
+                };
+            }
+
+            function sendNotifyForSomeOne(id) {
+                ws.send(JSON.stringify({ notify: { userId: id } }));
+            }
+
+            if (
+                Notification.permission !== "granted" &&
+                Notification.permission !== "denied"
+            ) {
+                Notification.requestPermission();
+            }
+
+            const showNotification = (msg) => {
+                if (Notification.permission === "granted") {
+                    new Notification("Hello!", { body: msg });
+                }
+            };
+
+            function randomColor() {
+                return `#${Math.floor(Math.random() * 16777215).toString(16)}`;
+            }
+
+            const isOverlapping = (x1, y1, x2, y2, size) => {
+                const distance = Math.sqrt((x1 - x2) ** 2 + (y1 - y2) ** 2);
+                return distance < size;
+            };
+
+            const setUsersPos = (newUsers) => {
+                const userLength = newUsers.length;
+
+                for (let i = 0; i < userLength; i++) {
+                    const buttonSize = 40;
+
+                    const user = newUsers[i];
+                    if (users[user.id] || user.id === userId) continue;
+
+                    let x,
+                        y,
+                        attempts = 0;
+                    const radius = Math.random() * (350 - 180) + 180;
+
+                    do {
+                        const angle = (i / userLength) * 2 * Math.PI;
+                        x = 120 + radius * Math.cos(angle) - buttonSize / 2;
+                        y = 120 + radius * Math.sin(angle) - buttonSize / 2;
+                        attempts++;
+                    } while (
+                        Object.values(users).some((u) =>
+                            isOverlapping(x, y, u.pose.x, u.pose.y, buttonSize)
+                        ) &&
+                        attempts < 200
+                    );
+
+                    const button = document.createElement("button");
+                    button.id = user.id;
+                    button.textContent = user.name;
+                    button.className = "user-button";
+                    button.style.top = `${y}px`;
+                    button.style.left = `${x}px`;
+                    button.style.backgroundColor = randomColor();
+                    button.onclick = () => sendNotifyForSomeOne(user.id);
+
+                    outerCircle.appendChild(button);
+
+                    users[user.id] = {
+                        id: user.id,
+                        name: user.name,
+                        pose: { x, y },
+                        htmlElement: button,
+                    };
+                }
+
+                for (const id in users) {
+                    if (!newUsers.some((u) => u.id === id)) {
+                        outerCircle.removeChild(users[id].htmlElement);
+                        delete users[id];
+                    }
+                }
+            };
+
+            const updateUserButtons = (users) => {
+                setUsersPos(users);
+            };
+
+            connectWebSocket();
+        </script>
+    </body>
+</html>
